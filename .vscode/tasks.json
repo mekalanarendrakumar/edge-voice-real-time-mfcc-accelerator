@@ -1,0 +1,25 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run main.py",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"EdgeVoice_Project/main.py"
+			],
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Open frontend (static HTML)",
+			"type": "shell",
+			"command": "start",
+			"args": [
+				"EdgeVoice_Project/frontend/index.html"
+			],
+			"problemMatcher": [],
+			"group": "build"
+		}
+	]
+}
