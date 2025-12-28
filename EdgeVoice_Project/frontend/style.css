@@ -70,7 +70,47 @@ button:hover, #chooseFileBtn:hover, #extractBtn:hover {
 	margin: 2rem auto 1rem auto;
 	padding: 1.5rem 2rem;
 	max-width: 700px;
-	box-shadow: 0 0 30px #ff00cc33;
+.container {
+	max-width: 500px;
+	margin: 40px auto;
+	padding: 24px;
+	background: #f9f9f9;
+	border-radius: 8px;
+	box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+	text-align: center;
+}
+h1 {
+	margin-bottom: 24px;
+}
+input[type="file"] {
+	margin-bottom: 12px;
+}
+button {
+	margin: 6px;
+	padding: 8px 16px;
+	border: none;
+	border-radius: 4px;
+	background: #0078d7;
+	color: #fff;
+	cursor: pointer;
+	font-size: 1em;
+}
+button:disabled {
+	background: #aaa;
+	cursor: not-allowed;
+}
+#mfccResult {
+	margin-top: 18px;
+	white-space: pre-wrap;
+	background: #eef;
+	padding: 10px;
+	border-radius: 4px;
+	font-family: monospace;
+}
+.error {
+	color: #c00;
+	margin-top: 12px;
+}
 	z-index: 1;
 	position: relative;
 }

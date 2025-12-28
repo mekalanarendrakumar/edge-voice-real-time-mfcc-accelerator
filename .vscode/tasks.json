@@ -20,6 +20,15 @@
 			],
 			"problemMatcher": [],
 			"group": "build"
+		},
+		{
+			"label": "Run main.py",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"EdgeVoice_Project/main.py"
+			],
+			"group": "build"
 		}
 	]
 }

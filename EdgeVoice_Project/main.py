@@ -1,368 +1,118 @@
-
-from flask import Flask, render_template, request, jsonify, send_file
-from werkzeug.utils import secure_filename
-from flask_cors import CORS
 import os
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import numpy as np
+from scipy.fftpack import dct
+from pydub import AudioSegment
 
-app = Flask(
-    __name__,
-    static_folder='static',
-    template_folder='templates'
-)
+app = Flask(__name__)
 CORS(app)
-UPLOAD_FOLDER = 'uploads'
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-# --- API endpoint to download all wake word samples and labels as a zip ---
-@app.route('/download_wakeword_dataset', methods=['GET'])
-def download_wakeword_dataset():
-    import io
-    import zipfile
-    save_dir = os.path.join(os.path.dirname(__file__), 'wakeword_data')
-    if not os.path.exists(save_dir):
-        return jsonify({'error': 'No wake word data found.'}), 404
-    mem_zip = io.BytesIO()
-    with zipfile.ZipFile(mem_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
-        # Add all .npy files
-        for fname in os.listdir(save_dir):
-            if fname.endswith('.npy') or fname == 'labels.csv':
-                fpath = os.path.join(save_dir, fname)
-                zf.write(fpath, arcname=fname)
-    mem_zip.seek(0)
-    return send_file(mem_zip, mimetype='application/zip', as_attachment=True, download_name='wakeword_dataset.zip')
 
-# --- API endpoint to list all trained wake words and sample counts ---
-@app.route('/list_wakewords', methods=['GET'])
-def list_wakewords():
-    from collections import Counter
-    save_dir = os.path.join(os.path.dirname(__file__), 'wakeword_data')
-    csv_path = os.path.join(save_dir, 'labels.csv')
-    if not os.path.exists(csv_path):
-        return jsonify({'wakewords': []})
-    labels = []
-    with open(csv_path, 'r') as f:
-        for line in f:
-            parts = line.strip().split(',')
-            if len(parts) == 2:
-                labels.append(parts[1])
-    counter = Counter(labels)
-    wakewords = [{'label': label, 'count': count} for label, count in counter.items()]
-    return jsonify({'wakewords': wakewords})
+def extract_mfcc(signal, sample_rate, num_ceps=13, nfft=512, nfilt=26):
+    pre_emphasis = 0.97
+    emphasized_signal = np.append(signal[0], signal[1:] - pre_emphasis * signal[:-1])
+    frame_size = 0.025
+    frame_stride = 0.01
+    frame_length, frame_step = int(round(frame_size * sample_rate)), int(round(frame_stride * sample_rate))
+    signal_length = len(emphasized_signal)
+    num_frames = int(np.ceil(float(np.abs(signal_length - frame_length)) / frame_step))
+    pad_signal_length = num_frames * frame_step + frame_length
+    z = np.zeros((pad_signal_length - signal_length))
+    pad_signal = np.append(emphasized_signal, z)
+    indices = np.tile(np.arange(0, frame_length), (num_frames, 1)) + \
+              np.tile(np.arange(0, num_frames * frame_step, frame_step), (frame_length, 1)).T
+    frames = pad_signal[indices.astype(np.int32, copy=False)]
+    frames *= np.hamming(frame_length)
+    mag_frames = np.absolute(np.fft.rfft(frames, nfft))
+    pow_frames = ((1.0 / nfft) * (mag_frames ** 2))
+    low_freq_mel = 0
+    high_freq_mel = (2595 * np.log10(1 + (sample_rate / 2) / 700))
+    mel_points = np.linspace(low_freq_mel, high_freq_mel, nfilt + 2)
+    hz_points = (700 * (10**(mel_points / 2595) - 1))
+    bin = np.floor((nfft + 1) * hz_points / sample_rate)
+    fbank = np.zeros((nfilt, int(np.floor(nfft / 2 + 1))))
+    for m in range(1, nfilt + 1):
+        f_m_minus = int(bin[m - 1])
+        f_m = int(bin[m])
+        f_m_plus = int(bin[m + 1])
+        for k in range(f_m_minus, f_m):
+            fbank[m - 1, k] = (k - bin[m - 1]) / (bin[m] - bin[m - 1])
+        for k in range(f_m, f_m_plus):
+            fbank[m - 1, k] = (bin[m + 1] - k) / (bin[m + 1] - bin[m])
+    filter_banks = np.dot(pow_frames, fbank.T)
+    filter_banks = np.where(filter_banks == 0, np.finfo(float).eps, filter_banks)
+    filter_banks = 20 * np.log10(filter_banks)
+    mfcc = dct(filter_banks, type=2, axis=1, norm='ortho')[:, :num_ceps]
+    return mfcc
+
+@app.route('/upload', methods=['POST'])
+def upload():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part'}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+    try:
+        audio = AudioSegment.from_file(file)
+        audio = audio.set_channels(1).set_frame_rate(16000)
+        samples = np.array(audio.get_array_of_samples()).astype(np.float32)
+        mfcc_features = extract_mfcc(samples, 16000)
+        mfcc_features = np.atleast_2d(mfcc_features)
+        print("DEBUG: mfcc_features.shape =", mfcc_features.shape)
+        return jsonify({'mfcc': mfcc_features.tolist()})
+    except Exception as e:
+        print("DEBUG: Exception in /upload:", str(e))
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/')
 def index():
-    return render_template('index.html')
-
-# --- API endpoint for audio upload and MFCC extraction ---
-@app.route('/upload', methods=['POST'])
-def upload_audio():
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file part'}), 400
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'No selected file'}), 400
-    filename = secure_filename(file.filename)
-    filepath = os.path.join(UPLOAD_FOLDER, filename)
-    file.save(filepath)
-    # Process audio: extract MFCC and detect command
-    import numpy as np
-    import scipy.io.wavfile as wav
-    from backend.mfcc import mfcc
-    from backend.command_detect import detect_command
-    try:
-        # Try reading as WAV first
-        try:
-            rate, signal = wav.read(filepath)
-        except Exception:
-            # If reading as WAV fails, try converting with pydub
-            try:
-                from pydub import AudioSegment
-            except ImportError:
-                return jsonify({'error': 'pydub is not installed on the server.'}), 500
-            try:
-                audio = AudioSegment.from_file(filepath)
-            except Exception as e:
-                return jsonify({'error': f'Could not decode audio file: {str(e)}'}), 400
-            wav_path = filepath + '.wav'
-            audio.export(wav_path, format='wav')
-            filepath = wav_path
-            try:
-                rate, signal = wav.read(filepath)
-            except Exception as e:
-                return jsonify({'error': f'File could not be read as WAV after conversion: {str(e)}'}), 400
-        if hasattr(signal, 'ndim') and signal.ndim > 1:
-            signal = signal[:, 0]  # Use first channel if stereo
-        mfcc_features = mfcc(signal, rate)
-        command = detect_command(mfcc_features)
-        # Convert MFCC numpy array to list for JSON and include shape
-        mfcc_list = mfcc_features.tolist() if hasattr(mfcc_features, 'tolist') else []
-        mfcc_shape = list(mfcc_features.shape) if hasattr(mfcc_features, 'shape') else [0, 0]
-        return jsonify({'status': 'processed', 'filename': filename, 'command': command, 'mfcc': mfcc_list, 'mfcc_shape': mfcc_shape})
-    except Exception as e:
-        import traceback
-        print('Error processing audio:', e)
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
-
-# --- API endpoint for wake word training ---
-@app.route('/train_wakeword', methods=['POST'])
-def train_wakeword():
-    if 'file' not in request.files or 'label' not in request.form:
-        return jsonify({'error': 'Missing file or label'}), 400
-    file = request.files['file']
-    label = request.form['label']
-    if file.filename == '' or not label:
-        return jsonify({'error': 'No selected file or label'}), 400
-    filename = secure_filename(label + '_' + file.filename)
-    filepath = os.path.join(UPLOAD_FOLDER, filename)
-    file.save(filepath)
-    # Extract MFCC features from the uploaded sample
-    import numpy as np
-    import scipy.io.wavfile as wav
-    from backend.mfcc import mfcc
-    try:
-        # Try reading as WAV first
-        try:
-            rate, signal = wav.read(filepath)
-        except Exception:
-            from pydub import AudioSegment
-            audio = AudioSegment.from_file(filepath)
-            wav_path = filepath + '.wav'
-            audio.export(wav_path, format='wav')
-            filepath = wav_path
-            rate, signal = wav.read(filepath)
-        if hasattr(signal, 'ndim') and signal.ndim > 1:
-            signal = signal[:, 0]  # Use first channel if stereo
-        mfcc_features = mfcc(signal, rate)
-        # Save MFCC features and label to wakeword_data/
-        save_dir = os.path.join(os.path.dirname(filepath), '../wakeword_data')
-        os.makedirs(save_dir, exist_ok=True)
-        mfcc_path = os.path.join(save_dir, f'{label}_{os.path.splitext(file.filename)[0]}.npy')
-        np.save(mfcc_path, mfcc_features)
-        # Optionally, append label to a CSV for dataset tracking
-        csv_path = os.path.join(save_dir, 'labels.csv')
-        with open(csv_path, 'a') as f:
-            f.write(f'{os.path.basename(mfcc_path)},{label}\n')
-        # --- Automatic model retraining ---
-        import glob
-        from sklearn import svm
-        import joblib
-        # Gather all MFCC feature files and labels
-        mfcc_files = glob.glob(os.path.join(save_dir, '*.npy'))
-        X = []
-        y = []
-        for mfcc_file in mfcc_files:
-            X.append(np.load(mfcc_file).flatten())
-            # Get label from CSV
-            base = os.path.basename(mfcc_file)
-            with open(csv_path, 'r') as f:
-                for line in f:
-                    fname, lbl = line.strip().split(',')
-                    if fname == base:
-                        y.append(lbl)
-                        break
-        if len(X) > 1 and len(X) == len(y):
-            clf = svm.SVC(kernel='linear', probability=True)
-            clf.fit(X, y)
-            model_path = os.path.join(save_dir, 'wakeword_model.pkl')
-            joblib.dump(clf, model_path)
-            retrain_status = 'Model retrained and saved.'
-        else:
-            retrain_status = 'Not enough data to retrain model.'
-        return jsonify({'status': 'wake word trained', 'filename': filename, 'label': label, 'mfcc_file': os.path.basename(mfcc_path), 'retrain': retrain_status})
-    except Exception as e:
-        import traceback
-        print('Error processing wake word training:', e)
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
-
-# --- API endpoint for real-time wake word detection ---
-@app.route('/detect_wakeword', methods=['POST'])
-def detect_wakeword():
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file part'}), 400
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'No selected file'}), 400
-    filename = secure_filename(file.filename)
-    filepath = os.path.join(UPLOAD_FOLDER, filename)
-    file.save(filepath)
-    import numpy as np
-    import scipy.io.wavfile as wav
-    from backend.mfcc import mfcc
-    import joblib
-    try:
-        # Try reading as WAV first
-        try:
-            rate, signal = wav.read(filepath)
-        except Exception:
-            from pydub import AudioSegment
-            audio = AudioSegment.from_file(filepath)
-            wav_path = filepath + '.wav'
-            audio.export(wav_path, format='wav')
-            filepath = wav_path
-            rate, signal = wav.read(filepath)
-        if hasattr(signal, 'ndim') and signal.ndim > 1:
-            signal = signal[:, 0]  # Use first channel if stereo
-        mfcc_features = mfcc(signal, rate)
-        X = mfcc_features.flatten().reshape(1, -1)
-        # Load trained model
-        model_path = os.path.join(os.path.dirname(filepath), '../wakeword_data/wakeword_model.pkl')
-        if not os.path.exists(model_path):
-            return jsonify({'error': 'No trained model found. Please train a wake word first.'}), 400
-        clf = joblib.load(model_path)
-        pred = clf.predict(X)[0]
-        proba = clf.predict_proba(X)[0]
-        label_list = clf.classes_.tolist()
-        confidence = float(np.max(proba))
-        return jsonify({'predicted_label': pred, 'confidence': confidence, 'labels': label_list, 'probabilities': proba.tolist()})
-    except Exception as e:
-        import traceback
-        print('Error in real-time wake word detection:', e)
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
-
-
-from flask import Flask, render_template, request, jsonify
-from werkzeug.utils import secure_filename
-from flask_cors import CORS
-import os
-
-app = Flask(
-    __name__,
-    static_folder='static',
-    template_folder='templates'
-)
-CORS(app)
-UPLOAD_FOLDER = 'uploads'
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
-@app.route('/')
-def index():
-    return render_template('index.html')
-
-# --- API endpoint for audio upload and MFCC extraction ---
-@app.route('/upload', methods=['POST'])
-def upload_audio():
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file part'}), 400
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'No selected file'}), 400
-    filename = secure_filename(file.filename)
-    filepath = os.path.join(UPLOAD_FOLDER, filename)
-    file.save(filepath)
-    # Process audio: extract MFCC and detect command
-    import numpy as np
-    import scipy.io.wavfile as wav
-    from backend.mfcc import mfcc
-    from backend.command_detect import detect_command
-    try:
-        # Try reading as WAV first
-        try:
-            rate, signal = wav.read(filepath)
-        except Exception:
-            # If reading as WAV fails, try converting with pydub
-            try:
-                from pydub import AudioSegment
-            except ImportError:
-                return jsonify({'error': 'pydub is not installed on the server.'}), 500
-            try:
-                audio = AudioSegment.from_file(filepath)
-            except Exception as e:
-                return jsonify({'error': f'Could not decode audio file: {str(e)}'}), 400
-            wav_path = filepath + '.wav'
-            audio.export(wav_path, format='wav')
-            filepath = wav_path
-            try:
-                rate, signal = wav.read(filepath)
-            except Exception as e:
-                return jsonify({'error': f'File could not be read as WAV after conversion: {str(e)}'}), 400
-        if hasattr(signal, 'ndim') and signal.ndim > 1:
-            signal = signal[:, 0]  # Use first channel if stereo
-        mfcc_features = mfcc(signal, rate)
-        command = detect_command(mfcc_features)
-        # Convert MFCC numpy array to list for JSON and include shape
-        mfcc_list = mfcc_features.tolist() if hasattr(mfcc_features, 'tolist') else []
-        mfcc_shape = list(mfcc_features.shape) if hasattr(mfcc_features, 'shape') else [0, 0]
-        return jsonify({'status': 'processed', 'filename': filename, 'command': command, 'mfcc': mfcc_list, 'mfcc_shape': mfcc_shape})
-    except Exception as e:
-        import traceback
-        print('Error processing audio:', e)
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
-
-# --- API endpoint for wake word training ---
-@app.route('/train_wakeword', methods=['POST'])
-def train_wakeword():
-    if 'file' not in request.files or 'label' not in request.form:
-        return jsonify({'error': 'Missing file or label'}), 400
-    file = request.files['file']
-    label = request.form['label']
-    if file.filename == '' or not label:
-        return jsonify({'error': 'No selected file or label'}), 400
-    filename = secure_filename(label + '_' + file.filename)
-    filepath = os.path.join(UPLOAD_FOLDER, filename)
-    file.save(filepath)
-    # Extract MFCC features from the uploaded sample
-    import numpy as np
-    import scipy.io.wavfile as wav
-    from backend.mfcc import mfcc
-    try:
-        # Try reading as WAV first
-        try:
-            rate, signal = wav.read(filepath)
-        except Exception:
-            from pydub import AudioSegment
-            audio = AudioSegment.from_file(filepath)
-            wav_path = filepath + '.wav'
-            audio.export(wav_path, format='wav')
-            filepath = wav_path
-            rate, signal = wav.read(filepath)
-        if hasattr(signal, 'ndim') and signal.ndim > 1:
-            signal = signal[:, 0]  # Use first channel if stereo
-        mfcc_features = mfcc(signal, rate)
-        # Save MFCC features and label to wakeword_data/
-        save_dir = os.path.join(os.path.dirname(filepath), '../wakeword_data')
-        os.makedirs(save_dir, exist_ok=True)
-        mfcc_path = os.path.join(save_dir, f'{label}_{os.path.splitext(file.filename)[0]}.npy')
-        np.save(mfcc_path, mfcc_features)
-        # Optionally, append label to a CSV for dataset tracking
-        csv_path = os.path.join(save_dir, 'labels.csv')
-        with open(csv_path, 'a') as f:
-            f.write(f'{os.path.basename(mfcc_path)},{label}\n')
-        # --- Automatic model retraining ---
-        import glob
-        from sklearn import svm
-        import joblib
-        # Gather all MFCC feature files and labels
-        mfcc_files = glob.glob(os.path.join(save_dir, '*.npy'))
-        X = []
-        y = []
-        for mfcc_file in mfcc_files:
-            X.append(np.load(mfcc_file).flatten())
-            # Get label from CSV
-            base = os.path.basename(mfcc_file)
-            with open(csv_path, 'r') as f:
-                for line in f:
-                    fname, lbl = line.strip().split(',')
-                    if fname == base:
-                        y.append(lbl)
-                        break
-        if len(X) > 1 and len(X) == len(y):
-            clf = svm.SVC(kernel='linear', probability=True)
-            clf.fit(X, y)
-            model_path = os.path.join(save_dir, 'wakeword_model.pkl')
-            joblib.dump(clf, model_path)
-            retrain_status = 'Model retrained and saved.'
-        else:
-            retrain_status = 'Not enough data to retrain model.'
-        return jsonify({'status': 'wake word trained', 'filename': filename, 'label': label, 'mfcc_file': os.path.basename(mfcc_path), 'retrain': retrain_status})
-    except Exception as e:
-        import traceback
-        print('Error processing wake word training:', e)
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+    return jsonify({'status': 'EdgeVoice backend running'})
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+    app.run(host='0.0.0.0', port=8000, debug=True)
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import librosa
+import numpy as np
+import os
+import tempfile
+
+app = Flask(__name__)
+CORS(app)
+
+@app.route("/")
+def home():
+    return "EdgeVoice Backend Running"
+
+@app.route("/extract-mfcc", methods=["POST"])
+def extract_mfcc():
+    try:
+        if "audio" not in request.files:
+            return jsonify({"error": "No audio file"}), 400
+
+        audio_file = request.files["audio"]
+
+        # Save temp audio
+        temp_dir = tempfile.mkdtemp()
+        audio_path = os.path.join(temp_dir, audio_file.filename)
+        audio_file.save(audio_path)
+
+        # Load audio
+        y, sr = librosa.load(audio_path, sr=16000)
+
+        # Extract MFCC
+        mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
+
+        return jsonify({
+            "status": "success",
+            "mfcc_shape": mfcc.shape,
+            "frames": mfcc.shape[1]
+        })
+
+    except Exception as e:
+        print("MFCC ERROR:", e)
+        return jsonify({"status": "failed", "error": str(e)}), 500
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)

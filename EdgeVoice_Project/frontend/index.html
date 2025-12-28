@@ -1,10 +1,3 @@
-                        <button id="downloadWakeWordDatasetBtn" style="margin-top:10px;">Download Wake Word Dataset (ZIP)</button>
-            
-        
-    <div class="panel" id="consolePanel" style="background:#111;color:#fff;font-family:monospace;padding:10px;margin-bottom:20px;box-shadow:0 0 24px #0ff,0 0 48px #f0f,0 0 64px #ff0;">
-        <h2 style="font-size:1.2em;">Real-Time MFCC Output Console</h2>
-        <pre id="mfccConsole" style="background:#111;color:#fff;font-size:1em;border:none;box-shadow:0 0 16px #0ff,0 0 32px #f0f;"></pre>
-    </div>
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -20,21 +13,8 @@
         <button id="recordBtn">Record Voice</button>
         <input type="file" id="fileInput" accept="audio/*" style="display:none;">
         <button id="chooseFileBtn">Choose File</button>
-        <button id="extractBtn">Extract MFCC</button>
-        <button id="trainWakeWordBtn" style="background:#ff0;color:#222;">Train Wake Word</button>
-    </div>
-
-    <!-- Wake Word Training Modal -->
-    <div id="wakeWordTrainModal" style="display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.7);z-index:1000;align-items:center;justify-content:center;">
-        <div style="background:#222;padding:30px 40px;border-radius:16px;max-width:400px;margin:auto;box-shadow:0 0 24px #0ff;">
-            <h2 style="color:#ff0;">Train Custom Wake Word</h2>
-            <label style="color:#fff;">Wake Word Label:</label>
-            <input id="wakeWordLabelInput" type="text" placeholder="e.g. Jarvis" style="width:100%;margin-bottom:10px;" />
-            <button id="startTrainRecordBtn" style="margin:10px 0;">Record Sample</button>
-            <div id="trainStatus" style="color:#0ff;margin-bottom:10px;"></div>
-            <button id="saveWakeWordBtn" style="background:#0ff;color:#222;">Save Wake Word</button>
-            <button id="closeTrainModalBtn" style="float:right;background:#f00;color:#fff;">Close</button>
-        </div>
+        <button id="extractMFCCBtn">Extract MFCC</button>
+        <!-- <button id="trainWakeWordBtn" style="background:#ff0;color:#222;">Train Wake Word</button> -->
     </div>
     <div id="status"></div>
     <div class="panel" id="audioPanel">
@@ -62,5 +42,16 @@
         <div id="wakeWordResult" style="font-size:1.2em;color:#0ff;"></div>
     </div>
     <script src="script.js"></script>
+</body>
+</html>
+            </div>
+            <script src="/static/script.js"></script>
+        </body>
+        </html>
+    <div class="panel" id="wakeWordPanel">
+        <h2>Wake Word Detection</h2>
+        <div id="wakeWordResult" style="font-size:1.2em;color:#0ff;"></div>
+    </div>
+    <script src="/static/script.js"></script>
 </body>
 </html>

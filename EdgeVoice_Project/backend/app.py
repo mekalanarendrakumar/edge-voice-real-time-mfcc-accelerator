@@ -28,19 +28,27 @@ def upload_audio():
     from mfcc import mfcc
     from command_detect import detect_command
     try:
-        # If MP3, convert to WAV using pydub
-        if filename.lower().endswith('.mp3'):
-            from pydub import AudioSegment
-            mp3_audio = AudioSegment.from_file(filepath, format='mp3')
-            wav_path = filepath + '.wav'
-            mp3_audio.export(wav_path, format='wav')
-            filepath = wav_path
-        # Only accept WAV files after conversion
-        if not filepath.lower().endswith('.wav'):
-            return jsonify({'error': 'Only WAV and MP3 files are supported. Please upload a .wav or .mp3 file.'}), 400
-        rate, signal = wav.read(filepath)
+        from pydub import AudioSegment
+        # Always try to convert to WAV using pydub, regardless of extension
+        try:
+            audio = AudioSegment.from_file(filepath)
+        except Exception as conv_err:
+            return jsonify({'error': f'Audio conversion failed: {conv_err}'}), 400
+        wav_path = filepath + '.converted.wav'
+        try:
+            audio.export(wav_path, format='wav')
+        except Exception as export_err:
+            return jsonify({'error': f'WAV export failed: {export_err}'}), 400
+        # Now process the converted WAV file
+        import scipy.io.wavfile as wav
+        try:
+            rate, signal = wav.read(wav_path)
+        except Exception as wav_err:
+            return jsonify({'error': f'WAV read failed: {wav_err}'}), 400
         if hasattr(signal, 'ndim') and signal.ndim > 1:
             signal = signal[:, 0]  # Use first channel if stereo
+        from mfcc import mfcc
+        from command_detect import detect_command
         mfcc_features = mfcc(signal, rate)
         command = detect_command(mfcc_features)
         # Convert MFCC numpy array to list for JSON and include shape
