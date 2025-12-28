@@ -12,6 +12,11 @@ CORS(app)
 UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+# Root route for homepage
+@app.route("/")
+def home():
+    return "Edge Voice Real-Time MFCC Accelerator is running!"
+
 @app.route('/upload', methods=['POST'])
 def upload_audio():
     if 'file' not in request.files:
